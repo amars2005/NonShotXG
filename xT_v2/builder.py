@@ -2,8 +2,9 @@ import os
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from config import DATA_DIR, SCALAR_COLS, NUM_CHANNELS, GRID_H, GRID_W
+from config import DATA_DIR, SCALAR_COLS, NUM_CHANNELS, GRID_H, GRID_W, CHAIN_GAMMA, BUILD_WORKERS
 from loader import StatsBomb360Loader
 from parser import MatchParser360
 from encoder import encode_event
@@ -50,18 +51,30 @@ class DatasetBuilder:
         skipped  = 0
         failures = 0
 
-        for match_id in tqdm(match_ids, desc="Building dataset"):
+        to_build = []
+        for match_id in match_ids:
             out_path = os.path.join(DATA_DIR, f"{match_id}.npz")
-
             if os.path.exists(out_path) and not force_rebuild:
                 skipped += 1
-                continue
+            else:
+                to_build.append((match_id, out_path))
 
-            try:
-                self._process_and_save(match_id, out_path)
-            except Exception as e:
-                tqdm.write(f"  [SKIP] Match {match_id}: {e}")
-                failures += 1
+        print(f"Matches to build: {len(to_build)}  |  Already built (skipping): {skipped}\n")
+
+        with ThreadPoolExecutor(max_workers=BUILD_WORKERS) as executor:
+            futures = {
+                executor.submit(self._process_and_save, mid, path): mid
+                for mid, path in to_build
+            }
+            with tqdm(total=len(futures), desc="Building dataset") as pbar:
+                for future in as_completed(futures):
+                    mid = futures[future]
+                    try:
+                        future.result()
+                    except Exception as e:
+                        tqdm.write(f"  [SKIP] Match {mid}: {e}")
+                        failures += 1
+                    pbar.update(1)
 
         print(f"\nBuild complete.  Skipped (already built): {skipped}  |  Failures: {failures}")
 
@@ -153,8 +166,15 @@ class DatasetBuilder:
 
     def _assign_chains(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Segments events into possession chains and labels each chain with
-        whether it ended in a goal (chain_goal = 1) or not (chain_goal = 0).
+        Segments events into possession chains and assigns a temporally
+        discounted label to each event.
+
+        For goal-scoring chains, each event receives:
+            label = CHAIN_GAMMA ^ (steps_from_chain_end)
+
+        So the shot that scores = 1.0, the pass before it = CHAIN_GAMMA,
+        the event before that = CHAIN_GAMMA^2, etc. Events in non-goal
+        chains receive label = 0.
 
         A new chain begins when:
           - The match changes
@@ -179,9 +199,19 @@ class DatasetBuilder:
         is_new_chain = match_change | period_change | team_change | prev_was_shot
         df['chain_id'] = is_new_chain.cumsum()
 
-        # A chain is "goal" if it contains a successful Shot
+        # Identify goal chains
         is_goal     = (df['type'] == 'Shot') & (df['success'] == 1)
-        goal_chains = df.loc[is_goal, 'chain_id'].unique()
-        df['chain_goal'] = df['chain_id'].isin(goal_chains).astype(int)
+        goal_chains = set(df.loc[is_goal, 'chain_id'].unique())
 
+        # Assign temporally discounted labels
+        labels = np.zeros(len(df), dtype=np.float32)
+        for chain_id, group in df.groupby('chain_id'):
+            if chain_id not in goal_chains:
+                continue
+            n = len(group)
+            # steps_from_end: last event = 0, second-to-last = 1, ...
+            steps = np.arange(n - 1, -1, -1, dtype=np.float32)
+            labels[group.index] = CHAIN_GAMMA ** steps
+
+        df['chain_goal'] = labels
         return df

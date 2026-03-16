@@ -56,7 +56,7 @@ def run_train(device: torch.device) -> None:
 def run_visualize(device: torch.device) -> None:
     import os
     from model import XTModel
-    from visualize import generate_heatmap
+    from visualize import generate_heatmap, generate_all_scenarios
 
     if not os.path.exists(BEST_MODEL_PATH):
         raise FileNotFoundError(
@@ -68,8 +68,10 @@ def run_visualize(device: torch.device) -> None:
     model.load_state_dict(torch.load(BEST_MODEL_PATH, map_location=device))
     model.eval()
 
-    print("\n--- Generating heatmap ---")
-    generate_heatmap(model, device, action_type='Pass')
+    for action_type in ('Pass', 'Carry', 'Dribble'):
+        print(f"\n--- Generating heatmap: {action_type} ---")
+        generate_heatmap(model, device, action_type=action_type)
+        generate_all_scenarios(model, device, action_type=action_type)
 
 
 # ---------------------------------------------------------------------------

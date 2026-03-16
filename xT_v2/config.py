@@ -46,6 +46,12 @@ SCALAR_COLS = _action_cols + [
 SCALAR_DIM = len(SCALAR_COLS)  # 22
 
 # ---------------------------------------------------------------------------
+# Dataset Building
+# ---------------------------------------------------------------------------
+CHAIN_GAMMA   = 0.9   # Temporal discount factor: label = gamma^(steps_from_chain_end)
+BUILD_WORKERS = 1     # Sequential by default — GitHub rate limits hurt parallel fetching
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 BATCH_SIZE   = 64
