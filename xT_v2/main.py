@@ -12,6 +12,9 @@ Usage
 """
 
 import argparse
+import json
+import os
+
 import torch
 
 from config import BEST_MODEL_PATH
@@ -33,7 +36,7 @@ def run_build(limit: int | None, force: bool) -> None:
 
 def run_train(device: torch.device) -> None:
     from builder import DatasetBuilder
-    from dataset import make_dataloaders
+    from dataset import make_dataloaders, make_test_loader
     from model import XTModel
     from train import train
 
@@ -42,7 +45,24 @@ def run_train(device: torch.device) -> None:
     spatial, scalar, labels, match_ids = builder.load_all()
     print(f"Total events: {len(labels):,}  |  Goal rate: {labels.mean():.4f}")
 
-    train_loader, val_loader = make_dataloaders(spatial, scalar, labels, match_ids)
+    train_loader, val_loader, test_loader = make_dataloaders(spatial, scalar, labels, match_ids)
+
+    # If xT_v3 has already been built, use its freeze-frame test match IDs so
+    # v2 and v3 are evaluated on exactly the same event population.
+    _v3_ids_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "xT_v3", "checkpoints", "test_match_ids.json",
+    )
+    if os.path.exists(_v3_ids_path):
+        with open(_v3_ids_path) as f:
+            v3_test_ids = set(json.load(f))
+        print(f"\nFound v3 test match IDs → rescoping v2 test set to freeze-frame matches.")
+        test_loader = make_test_loader(spatial, scalar, labels, match_ids, v3_test_ids)
+    else:
+        print(
+            "\nNo v3 test_match_ids.json found — using v2's own test split.\n"
+            "Re-run  python main.py --train  after building xT_v3 to align test scopes."
+        )
 
     print("\n--- Building model ---")
     model = XTModel().to(device)
@@ -50,7 +70,7 @@ def run_train(device: torch.device) -> None:
     print(f"Trainable parameters: {total_params:,}")
 
     print("\n--- Training ---")
-    train(model, train_loader, val_loader, device)
+    train(model, train_loader, val_loader, device, test_loader=test_loader)
 
 
 def run_visualize(device: torch.device) -> None:

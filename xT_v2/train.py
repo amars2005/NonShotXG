@@ -7,7 +7,12 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from scipy.stats import spearmanr
 
-from config import NUM_EPOCHS, LEARNING_RATE, WEIGHT_DECAY, BEST_MODEL_PATH, CHECKPOINT_DIR
+from config import NUM_EPOCHS, LEARNING_RATE, WEIGHT_DECAY, BEST_MODEL_PATH, CHECKPOINT_DIR, METRICS_PATH
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+from evaluate import compute_metrics, print_metrics, save_metrics
 
 LOG_PATH = os.path.join(os.path.dirname(CHECKPOINT_DIR), 'train.log')
 
@@ -22,6 +27,7 @@ def train(
     train_loader: DataLoader,
     val_loader:   DataLoader,
     device:       torch.device,
+    test_loader:  DataLoader | None = None,
 ) -> nn.Module:
     """
     Full training loop with:
@@ -102,6 +108,14 @@ def train(
 
     # Reload best weights before returning
     model.load_state_dict(torch.load(BEST_MODEL_PATH, map_location=device))
+
+    if test_loader is not None:
+        _log("\nRunning final evaluation on held-out test set...")
+        probs, labels = _get_predictions(model, test_loader, device)
+        metrics = compute_metrics(labels, probs)
+        print_metrics(metrics, "Test Set (v2 CNN)")
+        save_metrics(metrics, METRICS_PATH)
+
     return model
 
 
@@ -149,3 +163,28 @@ def _evaluate(
     mean_loss = total_loss / len(loader.dataset)
 
     return spearman, mse, mean_loss
+
+
+def _get_predictions(
+    model:  nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (probs, labels) arrays for the full loader — used for final test evaluation."""
+    model.eval()
+    all_probs:  list[float] = []
+    all_labels: list[float] = []
+
+    with torch.no_grad():
+        for spatial, scalar, labels in loader:
+            spatial = spatial.to(device, non_blocking=True)
+            scalar  = scalar.to(device,  non_blocking=True)
+            logits  = model(spatial, scalar)
+            probs   = torch.sigmoid(logits).cpu().numpy()
+            all_probs.extend(probs.tolist())
+            all_labels.extend(labels.numpy().tolist())
+
+    return (
+        np.array(all_probs,  dtype=np.float64),
+        np.array(all_labels, dtype=np.float64),
+    )

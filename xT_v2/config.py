@@ -58,7 +58,9 @@ BATCH_SIZE   = 64
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY  = 1e-4
 NUM_EPOCHS    = 50
-TRAIN_SPLIT   = 0.8
+TRAIN_SPLIT   = 0.70
+VAL_SPLIT     = 0.15
+# implied TEST_SPLIT = 0.15
 # 0 on Windows (no fork support); increase on Linux GPU machine (e.g. 4-8)
 NUM_WORKERS   = 0
 
@@ -67,7 +69,8 @@ NUM_WORKERS   = 0
 # ---------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-DATA_DIR       = os.path.join(_HERE, "data", "matches")
-CHECKPOINT_DIR = os.path.join(_HERE, "checkpoints")
+DATA_DIR        = os.path.join(_HERE, "data", "matches")
+CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints")
 BEST_MODEL_PATH = os.path.join(CHECKPOINT_DIR, "best_model.pt")
-HEATMAP_PATH   = os.path.join(_HERE, "xt_heatmap_v2.png")
+HEATMAP_PATH    = os.path.join(_HERE, "xt_heatmap_v2.png")
+METRICS_PATH    = os.path.join(os.path.dirname(_HERE), "metrics_v2.json")
