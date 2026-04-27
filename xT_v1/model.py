@@ -1,13 +1,21 @@
 # model.py
-import pandas as pd
-import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, brier_score_loss
+import os
+import sys
+
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches # Required for drawing circles/boxes
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+from evaluate import compute_metrics, print_metrics, save_metrics
+
+_DEFAULT_CSV = os.path.join(_ROOT, "statsbomb_chained_dataset.csv")
 
 class ExpectedThreatModel:
-    def __init__(self, filepath="statsbomb_chained_dataset.csv"):
+    def __init__(self, filepath=_DEFAULT_CSV):
         self.filepath = filepath
         # Increased depth slightly to capture more complex spatial patterns
         self.model = RandomForestClassifier(n_estimators=100, max_depth=12, random_state=42)
@@ -40,12 +48,16 @@ class ExpectedThreatModel:
     def train(self):
         df, features = self.load_and_prep()
         
-        # Split by Match ID
+        # Split by Match ID — seed=42 shuffle with 70/15/15 to match v2 and v3
         match_ids = df['match_id'].unique()
-        train_size = int(len(match_ids) * 0.8)
-        train_matches = match_ids[:train_size]
-        test_matches = match_ids[train_size:]
-        
+        rng = np.random.default_rng(seed=42)
+        rng.shuffle(match_ids)
+        train_end = int(len(match_ids) * 0.70)
+        val_end   = train_end + int(len(match_ids) * 0.15)
+        train_matches = match_ids[:train_end]
+        # val matches withheld from training (RF has no val loop, but kept consistent)
+        test_matches  = match_ids[val_end:]
+
         print(f"Training on {len(train_matches)} matches, Testing on {len(test_matches)} matches.")
         
         train_data = df[df['match_id'].isin(train_matches)]
@@ -61,12 +73,9 @@ class ExpectedThreatModel:
         
         # Evaluate
         probs = self.model.predict_proba(X_test)[:, 1]
-        auc = roc_auc_score(y_test, probs)
-        brier = brier_score_loss(y_test, probs)
-        
-        print(f"\n--- Model Results ---")
-        print(f"ROC AUC Score: {auc:.3f}")
-        print(f"Brier Score: {brier:.3f}")
+        metrics = compute_metrics(y_test.values, probs)
+        print_metrics(metrics, "v1 Test Results (Random Forest)")
+        save_metrics(metrics, os.path.join(_ROOT, "metrics_v1.json"))
         
         # Apply to whole dataset
         all_probs = self.model.predict_proba(df[features])[:, 1]
@@ -161,7 +170,7 @@ class ExpectedThreatModel:
         ax.axis('off') # Hide the axis numbers for a cleaner look
         
         plt.tight_layout()
-        plt.savefig("xt_heatmap.png", dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(os.path.dirname(os.path.abspath(__file__)), "xt_heatmap.png"), dpi=300, bbox_inches='tight')
         print("Heatmap saved to xt_heatmap.png")
 
 # --- EXECUTION ---
@@ -171,7 +180,7 @@ if __name__ == "__main__":
         xt_model = ExpectedThreatModel()
         df_with_preds = xt_model.train()
         xt_model.visualize_value_map(df_with_preds)
-        df_with_preds.to_csv("final_model_output.csv", index=False)
+        df_with_preds.to_csv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "final_model_output.csv"), index=False)
     except FileNotFoundError:
         print("Error: 'statsbomb_chained_dataset.csv' not found.")
         print("Please run 'python main.py' first to generate the data.")
