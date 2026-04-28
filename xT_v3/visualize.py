@@ -137,14 +137,12 @@ def _action_context(sx, sy, players):
     else:
         carry_ex, carry_ey = sx, sy
 
-    # Best pass target: most advanced outfield teammate
-    best_tm = max(tms_out, key=lambda p: p['location'][0]) if tms_out else None
-
     end_positions = {
         'Shot':    (_GOAL_X, _GOAL_Y),
         'Carry':   (carry_ex, carry_ey),
-        'Dribble': None,                                          # no end pos in StatsBomb
-        'Pass':    (best_tm['location'][0], best_tm['location'][1]) if best_tm else None,
+        'Dribble': (sx, sy),
+        # All outfield teammates — sweep will run model per target and take max xT
+        'Pass':    [(p['location'][0], p['location'][1]) for p in tms_out],
     }
 
     return weights, end_positions, under_pressure
@@ -203,9 +201,14 @@ def _sweep_pitch_weighted(model, device, players):
     frame_data = {'players': players, 'visible_area': []} if players else None
 
     # Pre-compute per-cell action context
+    # Pass end_positions is a list of targets; stored separately for multi-target max.
     weights_arr     = np.zeros((N, len(ACTIONS)), dtype=np.float32)
     end_pos_arr     = np.full((N, len(ACTIONS), 2), np.nan, dtype=np.float32)
     under_press_arr = np.zeros(N, dtype=bool)
+    # Pass targets are the same for every cell (players don't move); extract once.
+    pass_targets = [(p['location'][0], p['location'][1])
+                    for p in (players or [])
+                    if p.get('teammate') and not p.get('keeper')]
 
     for idx in range(N):
         gy, gx = divmod(idx, GRID_W)
@@ -214,10 +217,12 @@ def _sweep_pitch_weighted(model, device, players):
         under_press_arr[idx] = up
         for ai, a in enumerate(ACTIONS):
             weights_arr[idx, ai] = w[a]
-            if ep[a] is not None:
+            if a == 'Pass':
+                pass  # handled separately below
+            elif ep[a] is not None:
                 end_pos_arr[idx, ai] = ep[a]
             else:
-                end_pos_arr[idx, ai] = [sx, sy]  # dribble: same as start
+                end_pos_arr[idx, ai] = [sx, sy]
 
     # Build base spatial (channels 0–3, 5 constant per grid cell; ch4 varies per action)
     base_spatial = np.zeros((N, NUM_CHANNELS, GRID_H, GRID_W), dtype=np.float32)
@@ -234,7 +239,48 @@ def _sweep_pitch_weighted(model, device, players):
     BATCH = 256
     action_xt = {}
 
+    def _run_forward(spatial_a, scalar_a):
+        """Batch forward pass; returns flat (N,) probability array."""
+        all_probs = []
+        with torch.no_grad():
+            for start in range(0, N, BATCH):
+                end_  = min(start + BATCH, N)
+                b     = end_ - start
+                sp_t  = torch.from_numpy(spatial_a[start:end_]).to(device)
+                sc_t  = torch.from_numpy(scalar_a[start:end_]).to(device)
+                tok_b = torch.from_numpy(tokens).unsqueeze(0).expand(b, -1, -1).to(device)
+                msk_b = torch.from_numpy(tok_mask).unsqueeze(0).expand(b, -1).to(device)
+                logits = model(sp_t, sc_t, tok_b, msk_b)
+                probs  = torch.sigmoid(logits).cpu().numpy()
+                all_probs.extend(probs.tolist())
+        return np.array(all_probs, dtype=np.float32).reshape(N)
+
     for ai, action in enumerate(ACTIONS):
+        if action == 'Pass':
+            # Run once per teammate target, take per-cell max (mirrors app.py)
+            if not pass_targets:
+                action_xt['Pass'] = np.zeros(N, dtype=np.float32)
+                continue
+            candidate_probs = []
+            for (tex, tey) in pass_targets:
+                spatial_a = base_spatial.copy()
+                scalar_a  = np.zeros((N, SCALAR_DIM), dtype=np.float32)
+                gex = tex / PITCH_W * GRID_W
+                gey = tey / PITCH_H * GRID_H
+                xs  = np.arange(GRID_W, dtype=np.float32)
+                ys  = np.arange(GRID_H, dtype=np.float32)
+                XX, YY = np.meshgrid(xs, ys)
+                end_ch = np.exp(-((XX - gex)**2 + (YY - gey)**2) / (2 * GAUSSIAN_SIGMA**2))
+                for idx in range(N):
+                    spatial_a[idx, 4] = end_ch
+                    gy, gx = divmod(idx, GRID_W)
+                    sx, sy = float(xx[gy, gx]), float(yy[gy, gx])
+                    up = under_press_arr[idx]
+                    scalar_a[idx] = _build_scalar(sx, sy, 'Pass', tex, tey, bool(up))
+                candidate_probs.append(_run_forward(spatial_a, scalar_a))
+            action_xt['Pass'] = np.max(np.stack(candidate_probs), axis=0)
+            continue
+
         spatial_a = base_spatial.copy()
         scalar_a  = np.zeros((N, SCALAR_DIM), dtype=np.float32)
 
@@ -244,7 +290,6 @@ def _sweep_pitch_weighted(model, device, players):
             ex, ey = end_pos_arr[idx, ai]
             up     = under_press_arr[idx]
 
-            # Add end-position Gaussian to channel 4 (except Dribble)
             if action != 'Dribble':
                 gex = ex / PITCH_W * GRID_W
                 gey = ey / PITCH_H * GRID_H
@@ -257,24 +302,7 @@ def _sweep_pitch_weighted(model, device, players):
 
             scalar_a[idx] = _build_scalar(sx, sy, action, ex, ey, bool(up))
 
-        # Batch forward pass
-        all_probs = []
-        tok_t  = torch.from_numpy(np.tile(tokens, (1, 1, 1)).squeeze(0)).unsqueeze(0)
-        msk_t  = torch.from_numpy(tok_mask).unsqueeze(0)
-
-        with torch.no_grad():
-            for start in range(0, N, BATCH):
-                end_  = min(start + BATCH, N)
-                b     = end_ - start
-                sp_t  = torch.from_numpy(spatial_a[start:end_]).to(device)
-                sc_t  = torch.from_numpy(scalar_a[start:end_]).to(device)
-                tok_b = torch.from_numpy(tokens).unsqueeze(0).expand(b, -1, -1).to(device)
-                msk_b = torch.from_numpy(tok_mask).unsqueeze(0).expand(b, -1).to(device)
-                logits = model(sp_t, sc_t, tok_b, msk_b)
-                probs  = torch.sigmoid(logits).cpu().numpy()
-                all_probs.extend(probs.tolist())
-
-        action_xt[action] = np.array(all_probs, dtype=np.float32).reshape(N)
+        action_xt[action] = _run_forward(spatial_a, scalar_a)
 
     # Weighted combination
     z_flat = np.zeros(N, dtype=np.float32)

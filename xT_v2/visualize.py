@@ -1,3 +1,4 @@
+import math
 import os
 import numpy as np
 import torch
@@ -5,8 +6,16 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from config import GRID_W, GRID_H, PITCH_W, PITCH_H, NUM_CHANNELS, HEATMAP_PATH
+from config import GRID_W, GRID_H, PITCH_W, PITCH_H, NUM_CHANNELS, HEATMAP_PATH, GAUSSIAN_SIGMA
 from encoder import encode_event, build_inference_scalar
+
+_GOAL_X   = 120.0
+_GOAL_Y   = 40.0
+_POST_L   = 36.0
+_POST_R   = 44.0
+_MAX_DIST = math.sqrt(_GOAL_X**2 + _GOAL_Y**2)
+
+ACTIONS = ['Shot', 'Pass', 'Carry', 'Dribble']
 
 
 # ---------------------------------------------------------------------------
@@ -206,35 +215,282 @@ def generate_all_scenarios(
 
 
 # ---------------------------------------------------------------------------
+# Weighted xT — action context helpers
+# ---------------------------------------------------------------------------
+
+def _dist(x1, y1, x2, y2):
+    return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+
+
+def _in_shooting_lane(ox, oy, bx, by):
+    def cross(ax, ay, bx2, by2, px, py):
+        return (bx2 - ax) * (py - ay) - (by2 - ay) * (px - ax)
+    c1 = cross(bx, by, _GOAL_X, _POST_L, ox, oy)
+    c2 = cross(_GOAL_X, _POST_L, _GOAL_X, _POST_R, ox, oy)
+    c3 = cross(_GOAL_X, _POST_R, bx, by, ox, oy)
+    return (c1 >= 0 and c2 >= 0 and c3 >= 0) or (c1 <= 0 and c2 <= 0 and c3 <= 0)
+
+
+def _action_context(sx, sy, players):
+    opps_all  = [p for p in (players or []) if not p.get('teammate', True)]
+    tms_out   = [p for p in (players or []) if p.get('teammate') and not p.get('keeper')]
+
+    goalside     = [p for p in opps_all if p['location'][0] >= sx]
+    gs_within_5  = [p for p in goalside if _dist(*p['location'], sx, sy) < 5]
+    gs_within_10 = [p for p in goalside if _dist(*p['location'], sx, sy) < 10]
+    lane_def     = sum(1 for p in opps_all if _in_shooting_lane(*p['location'], sx, sy))
+
+    under_pressure = len(gs_within_5) > 0
+    dist_to_goal   = _dist(sx, sy, _GOAL_X, _GOAL_Y)
+
+    shot_w    = math.exp(-dist_to_goal / 25.0) * max(0.0, 1.0 - lane_def / 3.0)
+    pass_w    = min(len(tms_out), 5) / 5.0 if tms_out else 0.0
+    carry_w   = max(0.0, 1.0 - len(gs_within_10) / 4.0)
+    dribble_w = len(gs_within_5) * max(0.0, 1.0 - (len(gs_within_5) - 1) / 3.0)
+
+    total = max(shot_w + pass_w + carry_w + dribble_w, 0.01)
+    weights = {
+        'Shot':    shot_w    / total,
+        'Pass':    pass_w    / total,
+        'Carry':   carry_w   / total,
+        'Dribble': dribble_w / total,
+    }
+
+    dx = _GOAL_X - sx;  dy = _GOAL_Y - sy
+    cd = math.sqrt(dx**2 + dy**2)
+    if cd > 0:
+        carry_ex = min(sx + 8.0 * dx / cd, PITCH_W - 0.1)
+        carry_ey = max(0.1, min(sy + 8.0 * dy / cd, PITCH_H - 0.1))
+    else:
+        carry_ex, carry_ey = sx, sy
+
+    end_positions = {
+        'Shot':    (_GOAL_X, _GOAL_Y),
+        'Carry':   (carry_ex, carry_ey),
+        'Dribble': (sx, sy),
+        'Pass':    [(p['location'][0], p['location'][1]) for p in tms_out],
+    }
+
+    return weights, end_positions, under_pressure
+
+
+def _build_scalar_v2(sx, sy, action_type, ex, ey, under_pressure):
+    from config import ACTION_TYPES, SCALAR_COLS, SCALAR_DIM
+    idx = {col: i for i, col in enumerate(SCALAR_COLS)}
+    vec = np.zeros(SCALAR_DIM, dtype=np.float32)
+
+    if action_type in ACTION_TYPES:
+        vec[ACTION_TYPES.index(action_type)] = 1.0
+
+    vec[idx['start_x_norm']] = sx / PITCH_W
+    vec[idx['start_y_norm']] = sy / PITCH_H
+
+    dx = _GOAL_X - sx;  dy = _GOAL_Y - sy
+    vec[idx['dist_to_goal_norm']]  = math.sqrt(dx**2 + dy**2) / _MAX_DIST
+    vec[idx['angle_to_goal_norm']] = math.atan2(dy, dx) / math.pi
+
+    vec[idx['under_pressure']]  = float(under_pressure)
+    vec[idx['period_norm']]     = 0.25   # neutral: period 2
+    vec[idx['score_diff_norm']] = 0.5    # neutral: level
+
+    if action_type == 'Pass' and ex is not None:
+        pdx = ex - sx;  pdy = ey - sy
+        pl  = math.sqrt(pdx**2 + pdy**2)
+        vec[idx['pass_length_norm']] = pl / math.sqrt(PITCH_W**2 + PITCH_H**2)
+        vec[idx['pass_angle_norm']]  = math.atan2(pdy, pdx) / math.pi
+
+    vec[idx['end_x_norm']] = (ex if ex is not None else sx) / PITCH_W
+    vec[idx['end_y_norm']] = (ey if ey is not None else sy) / PITCH_H
+    return vec
+
+
+def _sweep_pitch_weighted(model, device, frame_data):
+    """Weighted xT sweep: runs all 4 action types per cell, combines by action weights."""
+    from config import SCALAR_DIM
+    players = frame_data.get('players', []) if frame_data else []
+
+    x_centres = np.linspace(PITCH_W / (2*GRID_W), PITCH_W - PITCH_W/(2*GRID_W), GRID_W)
+    y_centres  = np.linspace(PITCH_H / (2*GRID_H), PITCH_H - PITCH_H/(2*GRID_H), GRID_H)
+    xx, yy = np.meshgrid(x_centres, y_centres)
+    N = GRID_H * GRID_W
+
+    # Pass targets are fixed (players don't move per cell)
+    pass_targets = [(p['location'][0], p['location'][1])
+                    for p in players if p.get('teammate') and not p.get('keeper')]
+
+    weights_arr     = np.zeros((N, len(ACTIONS)), dtype=np.float32)
+    end_pos_arr     = np.full((N, len(ACTIONS), 2), np.nan, dtype=np.float32)
+    under_press_arr = np.zeros(N, dtype=bool)
+
+    for i in range(N):
+        gy, gx = divmod(i, GRID_W)
+        sx, sy = float(xx[gy, gx]), float(yy[gy, gx])
+        w, ep, up = _action_context(sx, sy, players)
+        under_press_arr[i] = up
+        for ai, a in enumerate(ACTIONS):
+            weights_arr[i, ai] = w[a]
+            if a != 'Pass':
+                ep_val = ep[a]
+                end_pos_arr[i, ai] = ep_val if ep_val is not None else [sx, sy]
+
+    # Base spatial: channels 0-3 and 5 are constant per cell; channel 4 varies per action
+    base_spatial = np.zeros((N, NUM_CHANNELS, GRID_H, GRID_W), dtype=np.float32)
+    for i in range(N):
+        gy, gx = divmod(i, GRID_W)
+        sx, sy = float(xx[gy, gx]), float(yy[gy, gx])
+        ev = {'start_x': sx, 'start_y': sy, 'end_x': np.nan, 'end_y': np.nan}
+        base_spatial[i] = encode_event(ev, frame_data)
+
+    BATCH = 256
+    action_xt = {}
+
+    def _run_forward(spatial_a, scalar_a):
+        all_probs = []
+        with torch.no_grad():
+            for start in range(0, N, BATCH):
+                end_  = min(start + BATCH, N)
+                sp_t  = torch.from_numpy(spatial_a[start:end_]).to(device)
+                sc_t  = torch.from_numpy(scalar_a[start:end_]).to(device)
+                logits = model(sp_t, sc_t)
+                probs  = torch.sigmoid(logits).cpu().numpy()
+                all_probs.extend(probs.tolist())
+        return np.array(all_probs, dtype=np.float32).reshape(N)
+
+    xs_grid = np.arange(GRID_W, dtype=np.float32)
+    ys_grid = np.arange(GRID_H, dtype=np.float32)
+    XX_g, YY_g = np.meshgrid(xs_grid, ys_grid)
+
+    for ai, action in enumerate(ACTIONS):
+        if action == 'Pass':
+            if not pass_targets:
+                action_xt['Pass'] = np.zeros(N, dtype=np.float32)
+                continue
+            candidate_probs = []
+            for (tex, tey) in pass_targets:
+                spatial_a = base_spatial.copy()
+                scalar_a  = np.zeros((N, SCALAR_DIM), dtype=np.float32)
+                gex = tex / PITCH_W * GRID_W
+                gey = tey / PITCH_H * GRID_H
+                end_ch = np.exp(-((XX_g - gex)**2 + (YY_g - gey)**2) / (2*GAUSSIAN_SIGMA**2))
+                for i in range(N):
+                    spatial_a[i, 4] = end_ch
+                    gy, gx = divmod(i, GRID_W)
+                    sx, sy = float(xx[gy, gx]), float(yy[gy, gx])
+                    scalar_a[i] = _build_scalar_v2(sx, sy, 'Pass', tex, tey, bool(under_press_arr[i]))
+                candidate_probs.append(_run_forward(spatial_a, scalar_a))
+            action_xt['Pass'] = np.max(np.stack(candidate_probs), axis=0)
+            continue
+
+        spatial_a = base_spatial.copy()
+        scalar_a  = np.zeros((N, SCALAR_DIM), dtype=np.float32)
+        for i in range(N):
+            gy, gx = divmod(i, GRID_W)
+            sx, sy = float(xx[gy, gx]), float(yy[gy, gx])
+            ex, ey = end_pos_arr[i, ai]
+            if action != 'Dribble':
+                gex = ex / PITCH_W * GRID_W
+                gey = ey / PITCH_H * GRID_H
+                spatial_a[i, 4] = np.exp(
+                    -((XX_g - gex)**2 + (YY_g - gey)**2) / (2*GAUSSIAN_SIGMA**2)
+                )
+            scalar_a[i] = _build_scalar_v2(sx, sy, action, ex, ey, bool(under_press_arr[i]))
+        action_xt[action] = _run_forward(spatial_a, scalar_a)
+
+    z_flat = np.zeros(N, dtype=np.float32)
+    for ai, action in enumerate(ACTIONS):
+        z_flat += weights_arr[:, ai] * action_xt[action]
+
+    return xx, yy, z_flat.reshape(GRID_H, GRID_W)
+
+
+def generate_heatmap_weighted(model: nn.Module, device: torch.device) -> None:
+    """Weighted xT heatmap with no players (baseline positional threat)."""
+    print("[v2] Generating weighted baseline heatmap...")
+    model.eval()
+    xx, yy, z = _sweep_pitch_weighted(model, device, frame_data=None)
+    out = os.path.join(os.path.dirname(HEATMAP_PATH), 'xt_heatmap_weighted_v2.png')
+    _plot_heatmap_titled(xx, yy, z, 'Non-Shot xT v2 — Weighted Action (No Players)', out)
+
+
+def generate_all_scenarios_weighted(model: nn.Module, device: torch.device) -> None:
+    """Scenario comparison grid using weighted action xT."""
+    print("[v2] Generating weighted scenario heatmaps...")
+    model.eval()
+
+    n     = len(SCENARIOS)
+    ncols = 3
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 7, nrows * 5))
+    axes = axes.flatten()
+
+    results    = {}
+    global_max = 0.0
+    for name, frame_data in SCENARIOS.items():
+        print(f"  Scenario: {name}")
+        xx, yy, z = _sweep_pitch_weighted(model, device, frame_data)
+        results[name] = (xx, yy, z, frame_data)
+        global_max = max(global_max, z.max())
+
+    for ax, (name, (xx, yy, z, frame_data)) in zip(axes, results.items()):
+        cf = ax.contourf(xx, yy, z, levels=30, cmap='magma', vmin=0, vmax=global_max)
+        fig.colorbar(cf, ax=ax, fraction=0.03, pad=0.02)
+        _draw_pitch(ax)
+
+        if frame_data and 'players' in frame_data:
+            for p in frame_data['players']:
+                px, py = p['location']
+                if p.get('keeper'):
+                    ax.scatter(px, py, c='cyan',  s=80, zorder=6, marker='s')
+                elif p.get('teammate'):
+                    ax.scatter(px, py, c='lime',  s=60, zorder=6, marker='^')
+                else:
+                    ax.scatter(px, py, c='red',   s=60, zorder=6, marker='o')
+
+        ax.set_title(name, fontsize=11, pad=6)
+        ax.set_xlim(0, PITCH_W); ax.set_ylim(PITCH_H, 0)
+        ax.set_aspect('equal'); ax.axis('off')
+
+    for ax in axes[n:]:
+        ax.set_visible(False)
+
+    fig.suptitle('Non-Shot xT v2 — Weighted Action Scenarios', fontsize=14, y=1.01)
+    plt.tight_layout()
+    out = os.path.join(os.path.dirname(HEATMAP_PATH), 'xt_scenarios_weighted_v2.png')
+    plt.savefig(out, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved: {out}")
+
+
+# ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 
-def _plot_heatmap(xx: np.ndarray, yy: np.ndarray, z: np.ndarray, action_type: str) -> None:
+def _plot_heatmap_titled(xx: np.ndarray, yy: np.ndarray, z: np.ndarray,
+                         title: str, out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(12, 8))
-
-    # Heatmap layer
-    cf = ax.contourf(xx, yy, z, levels=30, cmap='magma', vmin=0, vmax=z.max())
+    cf   = ax.contourf(xx, yy, z, levels=30, cmap='magma', vmin=0, vmax=z.max())
     cbar = fig.colorbar(cf, ax=ax, fraction=0.03, pad=0.02)
-    cbar.set_label('P(chain → goal)  —  xT', fontsize=11)
-
-    # Pitch markings on top
+    cbar.set_label('Weighted xT', fontsize=11)
     _draw_pitch(ax)
-
-    ax.set_title(
-        f'Non-Shot Expected Threat Map  (CNN, action={action_type})',
-        fontsize=14, pad=12,
-    )
+    ax.set_title(title, fontsize=14, pad=12)
     ax.set_xlim(0, PITCH_W)
-    ax.set_ylim(PITCH_H, 0)   # Invert Y: (0,0) top-left is standard football view
+    ax.set_ylim(PITCH_H, 0)
     ax.set_aspect('equal')
     ax.axis('off')
-
-    slug = action_type.replace(' ', '_').replace('*', '').lower()
-    out_path = HEATMAP_PATH.replace('_v2.png', f'_{slug}_v2.png')
     plt.tight_layout()
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Heatmap saved to {out_path}")
+
+
+def _plot_heatmap(xx: np.ndarray, yy: np.ndarray, z: np.ndarray, action_type: str) -> None:
+    slug     = action_type.replace(' ', '_').replace('*', '').lower()
+    out_path = HEATMAP_PATH.replace('_v2.png', f'_{slug}_v2.png')
+    _plot_heatmap_titled(
+        xx, yy, z,
+        f'Non-Shot Expected Threat Map  (CNN, action={action_type})',
+        out_path,
+    )
 
 
 def _draw_pitch(ax: plt.Axes) -> None:
