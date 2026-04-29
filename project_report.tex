@@ -20,12 +20,6 @@
 % ============================================================
 % ABSTRACT
 % ============================================================
-% TODO: Write ~200 words covering:
-%   - The problem: traditional xG models evaluate shots only, ignoring ~95% of play
-%   - Your approach: three progressive architectures (Random Forest → CNN → Transformer)
-%   - Data: StatsBomb open data (3,464 matches / 6.1M events) + 360 freeze-frame (323 matches)
-%   - Key results: v1 ROC AUC 0.6828, v2 ROC AUC 0.8416 (+16pp), v3 ROC AUC 0.8459 (+0.4pp over v2)
-%   - Conclusion: standardised evaluation framework shows clear, measurable progression
 \begin{abstract}
 Expected Goals (xG) is the dominant metric in modern football analytics, but it evaluates shots only, accounting for fewer than 2\% of all possession events. The remaining 98\%, comprising every pass, carry, and dribble that builds towards a scoring opportunity, carry no quantified threat value under the standard framework.
 
@@ -41,9 +35,6 @@ A standardised evaluation framework across all three versions (using ROC AUC, Br
 % ============================================================
 \section*{Acknowledgements}
 % ============================================================
-% TODO: Brief acknowledgements — typically 1 short paragraph.
-% Suggested content: thank your supervisor, acknowledge StatsBomb for making
-% their open data freely available for research, and note the GPU resource used.
 I would like to thank my supervisors, Dr Ioanna Papatsouma and Sam Brzezicki, for their guidance and support throughout this project. I am grateful to StatsBomb for making their event data and 360 freeze-frame data freely available for academic and non-commercial use (\url{https://github.com/statsbomb/open-data}). Model training was carried out on an NVIDIA RTX 6000 Ada GPU.
 
 \newpage
@@ -64,14 +55,7 @@ This project develops a \textbf{Non-Shot Expected Goals} model (also referred to
 
 A Flask-based interactive web frontend accompanies Version 3, allowing users to place players on a virtual pitch and receive a real-time weighted xT prediction.
 
-% TODO: Add the following two subsections to complete the Introduction:
 \subsection{Project Objectives}
-% TODO: State 3--5 clear, numbered objectives. For example:
-%   1. Develop a baseline xT model using classical ML on positional features.
-%   2. Improve on this baseline by incorporating full player positional context via CNNs.
-%   3. Further improve by introducing explicit relational reasoning via a Transformer.
-%   4. Establish a standardised evaluation framework to quantify improvement between versions.
-%   5. Build an accessible interactive tool to demonstrate the model to non-technical users.
 \begin{enumerate}
     \item Develop a baseline Non-Shot xT model using a classical machine learning approach on tabular positional and action-type features.
     \item Improve on this baseline by incorporating full player positional context through a deep learning architecture that encodes the pitch as a spatial image.
@@ -81,17 +65,11 @@ A Flask-based interactive web frontend accompanies Version 3, allowing users to 
 \end{enumerate}
 
 \subsection{Report Structure}
-% TODO: One sentence per section explaining what each covers.
-% e.g. "Section 2 reviews relevant literature on xG modelling and attention-based architectures..."
 The remainder of this report is structured as follows. Section~\ref{sec:litreview} reviews relevant prior work on expected goals, non-shot threat metrics, and the machine learning architectures used in this project. Section~\ref{sec:dataset} describes the StatsBomb open dataset and how it was processed into training data for each model version. Section~\ref{sec:features} defines the input features used across all three versions. Section~\ref{sec:eval} describes the evaluation framework, the four metrics used, and the design decisions that make cross-version comparisons valid. Sections~\ref{sec:v1}, \ref{sec:v2}, and \ref{sec:v3} present the architecture, training procedure, and results for each model version in turn. Section~\ref{sec:comparison} brings the results together in a comparative evaluation. Section~\ref{sec:viz} describes the visualisation tools and interactive frontend. Section~\ref{sec:conclusion} concludes and identifies directions for future work.
 
 % ============================================================
 \section{Literature Review}\label{sec:litreview}
 % ============================================================
-% TODO: This is the main missing section for a FYP. Aim for 2--4 pages.
-% It should contextualise your work within existing research and justify your design choices.
-% Each subsection below has suggested sources and key points to cover.
-
 \subsection{Expected Goals in Football Analytics}
 
 The quantitative analysis of goal-scoring probability in football has a long history. Early work by Reep and Benjamin (1968) \cite{reep1968} attempted to model the relationship between field position and scoring outcomes, and later statistical studies formalised the idea that shot location is the dominant predictor of whether an attempt results in a goal. The modern Expected Goals (xG) metric grew out of this tradition: for a given shot, xG is the probability that it results in a goal, estimated from historical data as a function of distance to goal, angle to goal, shot type, and whether the chance was headed or from open play. A shot taken from six metres directly in front of goal might carry an xG of 0.70, while a speculative long-range attempt might carry 0.03.
@@ -126,7 +104,7 @@ CNNs have since found applications far beyond natural images. In satellite image
 
 The Transformer architecture, introduced by Vaswani et al.\ \cite{vaswani2017}, replaced the recurrent structure of earlier sequence models with a mechanism called self-attention, in which every element of an input sequence can directly attend to every other element. For a sequence of $n$ tokens, self-attention computes a weighted sum of value vectors, where the weights are determined by the similarity between query and key vectors derived from the input. This allows the model to capture long-range dependencies without the vanishing gradient problems of recurrent networks, and to do so in parallel rather than sequentially.
 
-Of particular relevance to Version 3 is the concept of \textbf{cross-attention}, in which queries come from one sequence and keys and values come from another. This allows one set of inputs to ``read'' context from a different set , specifically the ball position querying the player context to ask: given where all the players are, how should I adjust my threat estimate for this specific ball position?
+\textbf{Cross-attention} extends this idea: queries come from one sequence and keys and values from another. For Version 3, this means the ball position can directly query the player context: given where all the players are, how should the threat estimate for this ball position be adjusted?
 
 The use of frozen pre-trained backbones combined with a small trainable head is well established in the transfer learning literature \cite{devlin2019}. Rather than training a Transformer on raw pitch data from scratch, Version 3 freezes the Version 2 CNN (which already encodes a strong positional threat estimate) and trains only the Stage 2 Transformer to produce a residual adjustment based on player positions. This keeps the training tractable and prevents the Transformer from simply re-learning what the CNN already knows. Treating each player as an individual token, rather than as a pixel in a density map, allows the model to reason about specific player relationships, for example which defender is closest to the ball or whether a keeper is off their line, in a way that the CNN's convolutional filters cannot naturally represent.
 
@@ -287,21 +265,14 @@ Third, the time features: \texttt{period} and \texttt{minute} are strongly corre
 % ============================================================
 \section{Evaluation Methodology}\label{sec:eval}
 % ============================================================
-% TODO: This section should appear before the model chapters so the reader
-% understands how results will be reported before seeing them.
-% Aim for ~1 page.
 
 \subsection{Evaluation Metrics}
-% TODO: Define and justify each of the four metrics used. For each one, state:
-%   (a) its mathematical definition
-%   (b) its range and what good/bad looks like
-%   (c) why it is appropriate for an xT model specifically
 
 \subsubsection{ROC AUC}
 
 ROC AUC (Area Under the Receiver Operating Characteristic Curve) measures how well the model can separate goal-chain events from non-goal-chain events, regardless of any specific probability threshold. A score of 0.5 means the model performs no better than random, while a score of 1.0 means perfect separation. Because we are ultimately interested in whether high-threat events receive higher scores than low-threat events, this is a natural metric for an xT model.
 
-For Versions 2 and 3, the training labels are soft floating-point values produced by temporal discounting, not the binary 0/1 labels that ROC AUC expects. We therefore binarise the labels before computing the metric: any event with a label greater than zero (i.e., any event that appeared in a goal-scoring chain) is treated as a positive. This is a principled choice ; it preserves the intended semantics of the label while making the metric computable.
+For Versions 2 and 3, the training labels are soft floating-point values produced by temporal discounting, not the binary 0/1 labels that ROC AUC expects. Labels are binarised before computing the metric: any event with a label above zero (i.e., any event in a goal-scoring chain) is treated as positive. This preserves the intended semantics of the label while making the metric computable.
 
 \subsubsection{Brier Score}
 
@@ -333,7 +304,7 @@ For an xT model, ranking quality matters: we want the model to correctly order e
 
 \subsection{Cross-Version Comparison Design}
 
-To make the results across all three versions directly comparable, we took several deliberate design decisions.
+Three decisions keep the cross-version comparison honest.
 
 All three versions use the same 70/15/15 train/validation/test split, performed at the match level with a fixed random seed of 42. Splitting at the match level is important to prevent data leakage: if events from the same match could appear in both the training and test sets, the model might implicitly memorise match-specific patterns rather than learning general football behaviour. Using a fixed seed means the split is reproducible and the same for every version.
 
@@ -373,9 +344,9 @@ Version 1 achieved a test ROC AUC of \textbf{0.6828}, Brier Score of \textbf{0.0
     \caption{Non-Shot xT Heatmap: Version 1 (Random Forest), assuming a Pass action type at a neutral game state (period 2, minute 45, score level, average team form).}
 \end{figure}
 
-The heatmap confirms that the model has learned a broadly sensible spatial representation: threat is concentrated in and around the attacking penalty area, peaks just in front of the 6-yard box, and drops off sharply as the ball moves deeper or wider. The defensive half is effectively zero throughout. This is consistent with the feature importance analysis showing that \texttt{dist\_to\_goal} accounts for nearly 40\% of the model's predictive power.
+The heatmap confirms that the model has learned a broadly sensible spatial representation: threat is concentrated in and around the attacking penalty area, peaks just in front of the 6-yard box, and drops off sharply as the ball moves deeper or wider. The defensive half is effectively zero throughout. This matches the feature importance results, where \texttt{dist\_to\_goal} alone accounts for nearly 40\% of the model's predictive power.
 
-However, the Random Forest's decision-tree structure is also visible: rather than a perfectly smooth radial gradient, the threat surface has jagged, stepped edges and a handful of small elevated regions around the midfield area (visible as isolated blobs). These are artefacts of the ensemble of axis-aligned decision boundaries that a Random Forest produces, and confirm that the model has not learned a true continuous spatial representation. This motivates the move to a CNN in Version 2, which can learn genuinely smooth spatial features directly from data.
+The Random Forest's decision-tree structure is also visible: rather than a smooth radial gradient, the threat surface has jagged, stepped edges and a handful of isolated blobs around the midfield area. These are artefacts of the axis-aligned decision boundaries that an ensemble of trees produces. A CNN, which learns spatial filters directly from data, does not have this limitation.
 
 \subsection{Feature Importance}
 
@@ -455,9 +426,6 @@ The dataset contains \textbf{1,036,140 events} from 323 matches (258 training, 6
 
 \subsection{Results}
 
-% TODO: Fill in all four metric values from metrics_v2.json:
-%   ROC AUC: 0.8416, Brier: 0.0067, Log Loss: 0.0413, Spearman: 0.0816
-%   Test set: 49 freeze-frame matches, 160,169 events
 Version 2 achieved a test ROC AUC of \textbf{0.8416}, Brier Score of \textbf{0.0067}, Log Loss of \textbf{0.0413}, and Spearman $\rho$ of \textbf{0.0816}. The ROC AUC of 0.84 is a substantial improvement over Version 1 (0.68), confirming that the CNN architecture combined with full player positional context is far better at separating goal-chain events from background possession. The best validation Spearman $\rho$ was \textbf{0.0862} , modest in absolute terms due to the extreme class imbalance, but positive and consistent, indicating the model learns a meaningful threat ordering. The low Brier Score reflects that the model correctly assigns very low probabilities to the vast majority of non-threatening events.
 
 \begin{figure}[h]
@@ -488,13 +456,11 @@ The six scenario panels are the most revealing diagnostic for Version 2's capabi
 
 \textbf{Goalkeeper Off Line.} The keeper is placed at $x = 106$ rather than $x = 119$. The threat surface shows only a subtle difference: the Gaussian representing the keeper is in a different position on the keeper channel, and the CNN responds slightly, but the change is not dramatic. The back four at $x = 100$ produces a familiar density wall that dominates the player context.
 
-Across all six panels the dominant story is similarity. The Version 2 scenario grids look almost like six copies of the same heatmap with dots placed differently on top. This is consistent with the structural limitation discussed below: the CNN processes player positions as a continuous density field, which loses the individual-level relational structure needed to discriminate between defensive formations of equal density but different tactical shape.
+Across all six panels the dominant story is similarity: the Version 2 scenario grids look almost like six copies of the same heatmap with dots placed differently on top. The CNN processes player positions as a continuous density field, and that representation simply cannot discriminate between defensive formations that have equal density but different tactical shape.
 
 \subsection{Limitations and Motivation for Version 3}
 
-Despite using 360 freeze-frame data, Version 2 still has a structural limitation: it encodes player positions as static image channels and relies on the CNN to learn the spatial relationships implicitly. The CNN is good at detecting local spatial patterns in images, but it is not naturally designed to reason about the explicit relationships between individual players , for example that there is a defender directly between the ball and the goal and two attackers making runs behind the defensive line. This kind of relational reasoning is better suited to an attention-based architecture.
-
-Additionally, while the ROC AUC of 0.8416 is strong, there is still room for improvement. The model captures broad positional threat correctly but may not be fully leveraging the player position information available in the 360 data , since encoding players as a blurred density map loses the individual-level relational structure between them.
+Version 2's core limitation is structural: player positions are encoded as image channels, and the CNN must infer their relationships implicitly from the resulting density patterns. A CNN is well-suited to detecting local spatial patterns, but it cannot directly represent that a specific defender is standing between ball and goal, or that two attackers are making runs behind the defensive line. The scenario comparison above illustrates this directly. Encoding player positions as tokens and attending over them explicitly is the natural fix.
 
 % ============================================================
 \section{Version 3: Transformer}\label{sec:v3}
@@ -510,7 +476,7 @@ Version 3 therefore introduces a \textbf{two-stage architecture}:
     \item \textbf{Stage 2}: A small Transformer that reads the 360 freeze-frame player positions as a sequence of tokens, uses self-attention to model relationships between players, and then uses cross-attention to let the ball position query that player context , producing a residual adjustment to the Stage 1 logit.
 \end{enumerate}
 
-Only Stage 2 is trained in Version 3; Stage 1 weights are frozen. This means the model starts from a strong position-based baseline and learns only to adjust it based on player context, which reduces the risk of overfitting and keeps the training tractable.
+Only Stage 2 is trained; Stage 1 weights are frozen. Stage 2 therefore starts from a strong positional baseline and learns only the residual correction based on player context, which keeps training tractable on the 323-match freeze-frame dataset.
 
 \subsection{Architecture}
 
@@ -575,12 +541,6 @@ Version 3 achieved a test ROC AUC of \textbf{0.8459}, Brier Score of \textbf{0.0
 
 The Stage 1 (frozen CNN) baseline Spearman $\rho$ on the freeze-frame validation events was 0.0863. Stage 2 training over 40 epochs produced a consistent $\Delta\rho \approx -0.0002$ relative to that baseline, meaning the Transformer cross-attention did not meaningfully improve rank correlation above the CNN alone. The best validation Spearman $\rho$ achieved was 0.0862 (epoch 1). Despite this flat $\rho$, the Brier and Log Loss metrics both improve over Version 2 (0.0067 $\to$ 0.0045 and 0.0413 $\to$ 0.0302), suggesting the Transformer is refining the probability calibration of the CNN's output without changing its ranking order.
 
-% TODO: If time permits, discuss possible reasons: (1) the freeze-frame token encoding
-% may not capture enough relational structure for the cross-attention to exploit;
-% (2) 40 epochs on 637,926 events may not be sufficient for Stage 2 to converge;
-% (3) Spearman rho as a metric may be less sensitive to the fine-grained adjustments
-% that player-context conditioning introduces.
-
 \begin{figure}[h]
     \centering
     \includegraphics[width=0.8\textwidth]{xT_v3/xt_heatmap_weighted_v3.png}
@@ -601,7 +561,7 @@ The six Version 3 scenario panels show considerably more differentiation than th
 
 \textbf{Compact Low Block.} With eight defenders forming two compact lines across the width of the box, the Version 3 heatmap shows a clearly suppressed central channel. Threat is not globally reduced; instead, it is redirected toward wider angles, reflecting that the Transformer has learned to associate a dense central defensive wall with diminished central threat while leaving wide approaches less affected. This selective suppression is absent from the Version 2 panel, which shows the same symmetric surface as the baseline.
 
-\textbf{High Press.} Defenders positioned at $x = 62$--$72$ push far up the pitch. Version 3 responds by preserving threat near goal (correctly, since no defenders are close) but the Transformer also produces elevated values in the space behind the high line itself --- the model has learned that high-stationed defenders imply an exposed channel in the attacking half. This is a formation-level inference that Version 2 cannot make.
+\textbf{High Press.} Defenders positioned at $x = 62$--$72$ push far up the pitch. Version 3 responds by preserving threat near goal (correctly, since no defenders are close) but the Transformer also produces elevated values in the space behind the high line itself; the model has learned that high-stationed defenders imply an exposed channel in the attacking half. This is a formation-level inference that Version 2 cannot make.
 
 \textbf{2v1 Overload in Box.} Two attacking teammates at $(108, 28)$ and $(108, 52)$ create a numerical advantage over the lone central defender at $(107, 40)$. The Version 3 heatmap shows a pronounced amplified hot spot in the penalty area, noticeably larger and brighter than the baseline, concentrated near where the overloading runners are positioned. The wide covering defenders at $(103, 18)$ and $(103, 62)$ produce visible local suppression at the flanks, directing the peak threat inward toward the overload zone.
 
@@ -613,7 +573,7 @@ The six Version 3 scenario panels show considerably more differentiation than th
 
 Comparing the two scenario grids side by side reveals what each architecture can and cannot represent.
 
-\textbf{Formation sensitivity.} The most striking difference is the Compact Low Block vs High Press pair. In Version 2, both panels are essentially identical to the baseline: the CNN sees high defensive density in both cases and responds similarly regardless of where the defenders are positioned. In Version 3, these two scenarios produce opposite effects --- the Compact Low Block suppresses the central channel at goal, while the High Press leaves that area open and highlights the space behind the defensive line. This is a qualitative difference in what the model understands: Version 2 counts defenders; Version 3 reasons about their shape and location relative to the ball.
+\textbf{Formation sensitivity.} The most striking difference is the Compact Low Block vs High Press pair. In Version 2, both panels are essentially identical to the baseline: the CNN sees high defensive density in both cases and responds similarly regardless of where the defenders are positioned. In Version 3, these two scenarios produce opposite effects: the Compact Low Block suppresses the central channel at goal, while the High Press leaves that area open and highlights the space behind the defensive line. This is a qualitative difference in what the model understands: Version 2 counts defenders; Version 3 reasons about their shape and location relative to the ball.
 
 \textbf{Overload detection.} The 2v1 Overload in Box scenario shows a moderate amplification in Version 2 (driven by the Pass weight from two teammates) but a clearly pronounced and spatially concentrated hot spot in Version 3. The Transformer not only registers the numerical advantage but also concentrates the amplification near where the two attacking runners are positioned, rather than distributing it broadly.
 
@@ -624,24 +584,7 @@ Comparing the two scenario grids side by side reveals what each architecture can
 % ============================================================
 \section{Comparative Evaluation}\label{sec:comparison}
 % ============================================================
-% TODO: This is the academic heart of the cross-version standardisation work.
-% Aim for 1--2 pages. Structure it as: table → metric-by-metric discussion →
-% what drives each step change → overall conclusion on the progression.
-
 \subsection{Results Summary}
-
-% TODO: Fill in the v3 column once training is complete. The v1 and v2 values
-% are confirmed from metrics_v1.json and metrics_v2.json respectively.
-%
-% v1: ROC AUC 0.6828 | Brier 0.0159 | Log Loss 0.0795 | Spearman 0.0810
-% v2: ROC AUC 0.8416 | Brier 0.0067 | Log Loss 0.0413 | Spearman 0.0816
-% v3: ROC AUC 0.8459 | Brier 0.0045 | Log Loss 0.0302 | Spearman 0.0843
-%
-% Note on comparability: v1 test set = all events from ~521 matches;
-% v2/v3 test set = same 49 freeze-frame matches (140,697 events).
-% The v1→v2 step therefore reflects both an architecture improvement AND
-% a data upgrade (gaining player positions). The v2→v3 step is a pure
-% architecture comparison on identical data.
 
 \begin{table}[h]
 \centering
@@ -660,68 +603,31 @@ v3: Transformer       & 0.8459 & 0.0045 & 0.0302 & 0.0843 \\
 
 \subsection{Discussion}
 
-% TODO: Write 3--4 paragraphs interpreting the table above.
-% Suggested structure:
-%
-% Paragraph 1 — v1 baseline:
-%   The v1 ROC AUC of 0.659 shows the model can do better than random (0.5) but
-%   is far from strong. The Spearman rho of 0.070 confirms the model learns a rough
-%   positional ranking but is dominated by distance-to-goal. Refer back to feature
-%   importance finding.
-%
-% Paragraph 2 — v1 → v2 step:
-%   The jump to ROC AUC 0.842 (+18pp) and halving of both Brier and Log Loss
-%   represents the largest single improvement. Discuss what drives it: (a) the CNN
-%   architecture can learn non-linear spatial patterns that the RF cannot, (b) the
-%   addition of full player positional context from 360 data. Note the caveat:
-%   this step involves both an architecture change AND a data change, so the two
-%   contributions cannot be fully separated.
-%
-% Paragraph 3 — v2 → v3 step:
-%   The v2 → v3 comparison is a pure architecture comparison (same 49 test matches,
-%   same events). Discuss the observed delta-rho from training and what it means.
-%   If the improvement is small, discuss why: the CNN may already be capturing
-%   most of the positional signal, the Transformer's residual adjustment has a
-%   limited range, or the training set size (323 matches) may be insufficient
-%   for the Transformer to learn subtle relational patterns.
-%
-% Paragraph 4 — overall:
-%   The progression from v1 to v3 demonstrates that both richer data and more
-%   expressive architectures contribute to improved xT modelling. The standardised
-%   evaluation framework makes these improvements directly legible.
 Version 1's ROC AUC of 0.6828 confirms that a Random Forest trained on tabular features can do better than random, but not by a large margin. The Spearman $\rho$ of 0.0810 reflects that the model learns a rough ordering: events closer to goal tend to score higher, dominated by distance and angle. The context features (\texttt{minute}, \texttt{score\_diff}, \texttt{team\_form}) each contribute a genuine share of around 6--8\% of total feature importance, collectively accounting for roughly 20\% of the model's predictive power, but the fundamental limit is the absence of player positional data. No scalar feature vector can encode the spatial arrangement of 22 players, and the binary labelling scheme does not reward actions that were close to generating a goal but did not quite get there.
 
 The step from Version 1 to Version 2 produces the largest single improvement across every metric: ROC AUC increases by 16 percentage points (0.6828 $\to$ 0.8416), Brier Score more than halves (0.0159 $\to$ 0.0067), and Log Loss nearly halves too (0.0795 $\to$ 0.0413). Two things change simultaneously at this step: the architecture moves from a Random Forest to a dual-branch CNN, and the training data gains full player positional context from the 360 freeze-frame data. It is not possible to fully separate the contribution of each, but together they represent a substantial upgrade in both the richness of the input and the model's capacity to learn from it.
 
 The step from Version 2 to Version 3 is a pure architecture comparison on identical data, and the results are more modest. ROC AUC improves marginally (0.8416 $\to$ 0.8459), while Brier and Log Loss improve more noticeably (0.0067 $\to$ 0.0045 and 0.0413 $\to$ 0.0302). However, Spearman $\rho$ barely changes (0.0816 $\to$ 0.0843), and during training the per-epoch $\Delta\rho$ relative to the Stage 1 CNN baseline was consistently around $-0.0002$, indicating the Transformer cross-attention did not meaningfully improve rank ordering above what the CNN alone had already learned. The improvements in Brier and Log Loss suggest the Transformer is refining the calibration of the probability values without changing how events are ranked. This may be because the CNN's spatial representation already captures most of the positional signal available in 323 matches, leaving limited room for the Transformer's relational reasoning to contribute.
 
-Overall, the progression from Version 1 to Version 3 demonstrates that both richer data and more expressive architectures contribute to improved xT modelling. The two biggest gains came from introducing player positional context (the 360 data) and adopting a deep learning architecture capable of learning non-linear spatial patterns. The standardised four-metric evaluation framework makes these improvements directly comparable across all three versions.
+The two biggest gains came from introducing player positional context (the 360 data) and adopting a deep learning architecture capable of learning non-linear spatial patterns. The standardised four-metric framework makes these improvements directly comparable across all three versions.
 
 \subsection{Limitations and Threats to Validity}
 
-% TODO: Discuss potential threats to the validity of the comparison:
-%   1. The v1/v2 test scopes differ (all events vs freeze-frame only) --- explain
-%      why this is a deliberate design choice and what it means for interpretation
-%   2. The small freeze-frame dataset (323 matches, 49 test) means v2/v3 results
-%      may have higher variance than v1
-%   3. Spearman rho is sensitive to the label distribution; the discounted soft
-%      labels in v2/v3 are themselves an approximation of true contribution
-%   4. All models trained on a single random seed --- results may vary with different splits
-There are four threats to the validity of the cross-version comparison that are worth acknowledging.
+The comparison has four caveats worth noting.
 
-First, the Version 1 and Version 2/3 test sets are not the same population of events. Version 1 is evaluated on all events from 520 matches, while Versions 2 and 3 are evaluated on 140,697 events from 49 freeze-frame matches. This is a deliberate design choice that reflects the data actually available to each model, but it means the Version 1 $\to$ Version 2 improvement cannot be attributed to architecture alone. Some of the gain may come from the fact that freeze-frame matches are, by nature, a curated subset of the dataset.
+The Version 1 and Version 2/3 test sets are not the same population. Version 1 is evaluated on all events from 520 matches; Versions 2 and 3 use 140,697 events from 49 freeze-frame matches. This reflects the data available to each model, but it means the Version 1 $\to$ Version 2 jump cannot be attributed to architecture alone; the freeze-frame subset may differ systematically from the full dataset.
 
-Second, the freeze-frame dataset is considerably smaller than the full event dataset (323 matches versus 3,464), so the Version 2 and Version 3 test results are based on fewer matches. With only 49 test matches, the metric estimates may have higher variance than the Version 1 results, and a different random seed could produce a noticeably different test set.
+With only 49 test matches, the Version 2 and Version 3 metric estimates carry more variance than Version 1's, and a different random seed could shift the test set noticeably.
 
-Third, the Spearman $\rho$ values for Versions 2 and 3 are computed against soft discounted labels, which are themselves an approximation of each event's true contribution to a goal. The $\gamma = 0.9$ discount factor is a modelling assumption, not ground truth, and a different choice of $\gamma$ would produce different label distributions and different $\rho$ values.
+The Spearman $\rho$ values for Versions 2 and 3 are computed against soft discounted labels, which are an approximation of true event contribution. The discount factor $\gamma = 0.9$ is a modelling choice; a different value would produce different $\rho$ values.
 
-Finally, all three models were trained and evaluated using a single random seed (42). Results may vary under different splits, and it is possible that the Version 3 $\Delta\rho$ would be more positive or negative under a different partition of the 323 freeze-frame matches.
+All three models used a single random seed (42) for both training and the train/test split. Version 3's $\Delta\rho$ could plausibly be more positive or negative under a different partition of the 323 freeze-frame matches.
 
 % ============================================================
 \section{Visualisations and Frontend}\label{sec:viz}
 % ============================================================
 
-With a trained model in hand, it is important to present the predictions in a form that is intuitive for football analysts and fans. Two visualisation approaches were developed.
+Two visualisation approaches were developed to present the model's predictions in an accessible form.
 
 \subsection{xT Heatmap}
 
@@ -755,16 +661,18 @@ The result is displayed as a large ``xT'' value, with a breakdown table showing 
 
 \begin{figure}[h]
     \centering
-    % TODO: Replace with actual screenshot — run `python3 xtv3fe/app.py`, open
-    % http://localhost:5000 in a browser, place some players, and save a screenshot
-    % as frontend_screenshot.png in the project root.
-    \fbox{\parbox{0.85\textwidth}{\centering\vspace{2cm}
-    \textit{[Screenshot of the interactive xT web frontend to be inserted here.\\
-    Run \texttt{python3 xtv3fe/app.py} and capture the browser window.]}
-    \vspace{2cm}}}
-    \caption{Interactive xT web frontend: the user places players on the pitch and
-             the model returns a real-time weighted xT prediction with per-action breakdown.}
+    \includegraphics[width=\textwidth]{frontend_screenshot.png}
+    \caption{Interactive xT web frontend: ball carrier placed at approximately $(83, 40)$, two
+             outfield teammates at the edge of the penalty area, two opponents inside the box,
+             and an opponent goalkeeper. The model returns a weighted xT of 0.372 with a
+             per-action breakdown showing Carry as the dominant action at 61.8\%.}
 \end{figure}
+
+The screenshot illustrates a representative inference scenario. The ball carrier is placed at approximately $(83, 40)$, roughly 37 yards from goal. Two outfield teammates are positioned at the near edge of the penalty area (one upper, one lower), two opponents are inside the box, and the opposing goalkeeper is on the goal line. The model returns a weighted xT of \textbf{0.372} with no pressure detected.
+
+The action breakdown reveals the model's reasoning explicitly. \textbf{Carry} dominates with a 61.8\% weight and a contribution of 0.193, because no defenders are within 10 yards of the ball carrier; the carry weight formula $\max(0, 1 - n_{\mathrm{close}}/4)$ evaluates to approximately 1.0, reflecting that carrying toward goal from this position is uncontested. \textbf{Pass} accounts for 24.7\% of the weight: two available teammates give a pass weight of $2/5 = 0.40$ before normalisation, and the best pass target is identified as the upper teammate at $(97.7, 22)$, who is in a dangerous position at the box edge (xT 0.243). \textbf{Shot} receives a 13.4\% weight and a high individual xT of 0.883 (reflecting genuine danger if a shot is attempted), but the weight is suppressed by the large distance, with $e^{-37/25} \approx 0.23$, and partial shooting-lane obstruction from the opponents inside the box. \textbf{Dribble} receives 0\% weight because no defender is within 5 yards, so the dribble trigger condition is not met.
+
+The weighted total is $0.134 \times 0.883 + 0.247 \times 0.243 + 0.618 \times 0.312 + 0 \approx 0.372$, matching the displayed value exactly. The interface makes this decomposition immediately legible: not just a headline xT number, but a transparent account of which action types drive the prediction and why, allowing users to understand intuitively how player positioning shapes the model's assessment of attacking threat.
 
 % ============================================================
 \section{Conclusion}\label{sec:conclusion}
@@ -788,16 +696,11 @@ The accompanying interactive frontend brings the model to life for a non-technic
     \item A more principled action-weight inference (e.g.\ trained jointly with the xT model) would improve the quality of the weighted visualisations.
 \end{itemize}
 
-Overall, the project demonstrates a clear progression from a simple machine learning baseline to a sophisticated deep learning model capable of contextualising attacking threat in football with player-level spatial reasoning.
+Each version is a direct response to what the previous one could not do, and the metric progression reflects that.
 
 % ============================================================
 % REFERENCES
 % ============================================================
-% TODO: Replace each \bibitem below with proper bibliographic details.
-% Aim for at least 10 references. Suggested sources are listed in the comments.
-% Use a consistent citation style (Harvard or IEEE are most common for CS FYPs ---
-% check your department's requirements).
-
 \begin{thebibliography}{99}
 
 \bibitem{reep1968}

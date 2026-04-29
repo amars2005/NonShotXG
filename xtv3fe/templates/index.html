@@ -322,10 +322,10 @@ function drawPitch() {
 
   ctx.beginPath();
   const [p1x, p1y] = pitchToCanvas(12, 40);
-  ctx.arc(p1x, p1y, 10*scaleX, -Math.PI*0.6, -Math.PI*0.4, false); ctx.stroke();
+  ctx.arc(p1x, p1y, 10*scaleX, -Math.PI*0.295, Math.PI*0.295, false); ctx.stroke();
   ctx.beginPath();
   const [p2x, p2y] = pitchToCanvas(108, 40);
-  ctx.arc(p2x, p2y, 10*scaleX, Math.PI*0.4, Math.PI*0.6, true); ctx.stroke();
+  ctx.arc(p2x, p2y, 10*scaleX, Math.PI*0.705, Math.PI*1.295, false); ctx.stroke();
 
   ctx.fillStyle = 'rgba(255,255,255,0.25)';
   ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
