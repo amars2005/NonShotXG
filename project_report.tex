@@ -140,17 +140,17 @@ A more recent addition to the dataset is StatsBomb 360 data \cite{statsbomb360},
 \section{Dataset}\label{sec:dataset}
 % ============================================================
 
-Online, I was able to find a large dataset, including lots of data from thousands of football matches, across many different leagues and competitions. This dataset is open-source, and can be found at \url{https://github.com/statsbomb/open-data}. As it is open-source, it is perfect for us to use to create our model, as we can use the data for any means we want.
+This project utilises a comprehensive, open-source dataset containing event data from thousands of football matches across multiple leagues and competitions. The dataset is publicly provided by StatsBomb (\url{https://github.com/statsbomb/open-data}), making it an ideal resource for developing and training the proposed machine learning models.
 
 \subsection{What Data Does It Include}
 
-This dataset contains data from over a thousand matches, all saved as JSON files. These files, each one representing a game, include the line-ups of each team, accurate to the second data of where the ball is at all times, and the start and end position of the ball on every play, whether that's a pass, a dribble, or a shot. This means I will be able to track the position of the ball at all times, and see from which positions a goal is most likely to occur. However this dataset is not fully comprehensive, as it doesn't include other valuable information, such as the position of every single player at all times, which can have a large impact on xG, as shooting at an empty net is very different to shooting at one with a goalkeeper in front. This means that while we can produce a very accurate model, we can't account for every single variable possible.
+The dataset comprises over a thousand matches, stored as JSON files. Each match file includes team line-ups, precise timestamps for ball possession, and the start and end coordinates of every on-ball action (such as passes, dribbles, and shots). This granularity allows the model to track the ball's location throughout possession chains and calculate the likelihood of a goal occurring from specific pitch areas. However, the standard event dataset is not fully comprehensive; it lacks the positional data of off-ball players. Since the positions of defenders and the goalkeeper significantly impact expected goals, the baseline model cannot account for these spatial variables.
 
-From Version 2 onwards, the model also makes use of StatsBomb's \textbf{360 data}. For a subset of matches in the dataset, StatsBomb provides freeze-frame snapshots: at the moment of each tracked event, the exact positions of all visible players on the pitch are recorded. This data is available for 323 matches and enables the model to see not just where the ball is, but where every player is at the exact moment of each action , a significant upgrade over the original event data alone.
+From Version 2 onwards, the model also makes use of StatsBomb's \textbf{360 data}. For a subset of matches in the dataset, StatsBomb provides freeze-frame snapshots: at the moment of each tracked event, the exact positions of all visible players on the pitch are recorded. This data is available for 323 matches and enables the model to see not just where the ball is, but where every player is at the exact moment of each action, providing a significant upgrade over the original event data alone.
 
 \subsection{Compilation to Python}
 
-To predict the likelihood of scoring, I will be using Python, and some of its modules to predict the likelihood of scoring. This means I will need to get the data from the JSON files provided, extract all necessary information, and process it into either Python classes or a spreadsheet CSV file.
+Data extraction and preprocessing were performed using Python. The raw data was parsed from the provided JSON files, and the relevant features were extracted and processed into structured formats for model training.
 
 For Version 1, this was achieved by using StatsBombPy, a Python library that interfaces directly with the open-data repository. Events are filtered to passes, carries, and shots, and their relevant features are extracted into a flat CSV file. For Versions 2 and 3, which require 360 freeze-frame data, a more complex pipeline was built that encodes each event as a multi-channel spatial tensor (a 2D grid representing the pitch) alongside a scalar feature vector, with each match saved as a compressed \texttt{.npz} file for efficient training.
 
@@ -269,7 +269,7 @@ Additionally, Version 3 encodes each player in the 360 freeze frame as a token v
 
 \subsection{Feature Correlation}
 
-Before I process my data, I wanted to check whether these features correlate highly with one another. If there are highly correlated variables, not only does this bring more computation than is necessary, the correlated variables don't provide enough necessary information to compensate for this extra training. To decide this information, I have listed out my variables, and produced a feature correlation graph, to visualise how much each feature matches the others from a scale from -1 to 1, and you can see this map here.
+Before processing the data, it was necessary to check whether the selected features correlated highly with one another. Highly correlated variables introduce unnecessary computational overhead and fail to provide enough unique information to justify the extra training time. To evaluate this, a Pearson correlation matrix was generated to visualise how much each feature matches the others on a scale from -1 to 1 (see Figure 1).
 
 \begin{figure}[h]
     \centering
@@ -301,7 +301,7 @@ Third, the time features: \texttt{period} and \texttt{minute} are strongly corre
 
 ROC AUC (Area Under the Receiver Operating Characteristic Curve) measures how well the model can separate goal-chain events from non-goal-chain events, regardless of any specific probability threshold. A score of 0.5 means the model performs no better than random, while a score of 1.0 means perfect separation. Because we are ultimately interested in whether high-threat events receive higher scores than low-threat events, this is a natural metric for an xT model.
 
-For Versions 2 and 3, the training labels are soft floating-point values produced by temporal discounting, not the binary 0/1 labels that ROC AUC expects. We therefore binarise the labels before computing the metric: any event with a label greater than zero (i.e., any event that appeared in a goal-scoring chain) is treated as a positive. This is a principled choice ; it preserves the intended semantics of the label while making the metric computable.
+For Versions 2 and 3, the training labels are soft floating-point values produced by temporal discounting, not the binary 0/1 labels that ROC AUC expects. We therefore binarise the labels before computing the metric: any event with a label greater than zero (i.e., any event that appeared in a goal-scoring chain) is treated as a positive. This is a principled choice: it preserves the intended semantics of the label while making the metric computable.
 
 \subsubsection{Brier Score}
 
@@ -311,7 +311,7 @@ The Brier Score is the mean squared error between the model's predicted probabil
 \text{BS} = \frac{1}{N} \sum_{i=1}^{N} (\hat{p}_i - y_i)^2
 \]
 
-It ranges from 0 (perfect predictions) to 1 (worst possible). Unlike ROC AUC, which only cares about ranking, the Brier Score also penalises poor calibration : a model that assigns a probability of 0.9 to an event that does not lead to a goal is penalised more than one that assigns 0.6 to the same event. This makes it a useful complement to ROC AUC: a model can have a high AUC but a poor Brier Score if its predicted probabilities are systematically over-confident.
+It ranges from 0 (perfect predictions) to 1 (worst possible). Unlike ROC AUC, which only cares about ranking, the Brier Score also penalises poor calibration. For example, a model that assigns a probability of 0.9 to an event that does not lead to a goal is penalised more than one that assigns 0.6 to the same event. This makes it a useful complement to ROC AUC: a model can have a high AUC but a poor Brier Score if its predicted probabilities are systematically over-confident.
 
 \subsubsection{Log Loss (Binary Cross-Entropy)}
 
@@ -355,11 +355,11 @@ We will also need to chain these events together, as mentioned in Section~\ref{s
 
 \subsection{Model Architecture and Design Choices}
 
-After all of this data is processed, we can start to think about how to train a model to predict the likelihood of scoring. In this iteration of training, I have decided to go with a Random Forest Model, which generates many different decision trees, and combines their output to generate a single result. In order to do this, we have to first split the data into training data, and validation data, and decide on metrics to effectively infer how accurate our model is to real life.
+After the data was processed, the next step was to train a model to predict the likelihood of scoring. For this initial iteration, a Random Forest model was selected. This algorithm generates multiple decision trees and aggregates their outputs to produce a single prediction. Prior to training, the data was partitioned into training and validation sets, and appropriate metrics were established to effectively evaluate the model's performance.
 
 The dataset is split at the match level using a 70/15/15 train/validation/test partition with a fixed seed (42), matching the split used by all three model versions. Entire matches belong to exactly one partition, which prevents data leakage that would arise if events from the same match appeared in both the training and test sets. Version 1 does not use a validation loop (Random Forests have no early stopping), so the validation matches are withheld from training but not used during the training process itself.
 
-To be able to infer as well how well the model performs, I will be using ROC AUC, as well as the Brier Score. ROC plots the True Positive rate against the False Positive Rate on a graph, where the ROC AUC score is given by the area under this graph. A ROC AUC score of 1 shows a perfect model, whereas if it is 0.5, our model is just making predictions at random. A Brier score on the other hand is used to evaluate the accuracy of predictions for binary outcomes, and is calculated by taking the mean squared difference between predicted probabilities and actual outcomes, ranging from the best possible at 0 and the worst possible at 1.
+To assess model performance, ROC AUC and Brier Score were utilised. ROC plots the True Positive Rate against the False Positive Rate, where the ROC AUC score is given by the area under the curve. A score of 1 indicates a perfect model, whereas a score of 0.5 indicates random predictions. The Brier Score evaluates the accuracy of predictions for binary outcomes by taking the mean squared difference between predicted probabilities and actual outcomes, ranging from the best possible score of 0 to the worst possible score of 1.
 
 Using both of these evaluation metrics, we should be able to get a very solid inference of how well our model is working, but to fully ensure, I will also make sure to generate a heatmap when we have finished training to predict the likelihood of scoring from each position on the pitch, and line it up with what logically makes sense.
 
@@ -395,7 +395,7 @@ The action type flags (\texttt{type\_Pass} at 0.017, \texttt{type\_Carry} at 0.0
 
 \subsection{Limitations and Motivation for Version 2}
 
-As we can see from our results, there are some fundamental issues with our model. Distance to goal alone accounts for nearly 40\% of the model's predictive power, and the top four spatial features (\texttt{dist\_to\_goal}, \texttt{start\_x}, \texttt{start\_y}, \texttt{angle\_to\_goal}) together account for roughly 74\%. The context features (\texttt{minute}, \texttt{score\_diff}, \texttt{team\_form}) add a genuine but secondary contribution of around 20\%, while \texttt{period} and the action-type flags contribute very little. The model also ignores the other players' positional data completely. Incorporating it would require a richer representation than a flat scalar feature vector: a Random Forest cannot learn the complex spatial relationships between each of the players and the ball from a list of numbers alone.
+The results highlight several fundamental limitations with the Version 1 model. Distance to goal alone accounts for nearly 40\% of the model's predictive power, and the top four spatial features (\texttt{dist\_to\_goal}, \texttt{start\_x}, \texttt{start\_y}, \texttt{angle\_to\_goal}) together account for roughly 74\%. The context features (\texttt{minute}, \texttt{score\_diff}, \texttt{team\_form}) add a genuine but secondary contribution of around 20\%, while \texttt{period} and the action-type flags contribute very little. The model also ignores the other players' positional data completely. Incorporating it would require a richer representation than a flat scalar feature vector: a Random Forest cannot learn the complex spatial relationships between each of the players and the ball from a list of numbers alone.
 
 % ============================================================
 \section{Version 2: CNN + MLP}\label{sec:v2}
@@ -455,10 +455,7 @@ The dataset contains \textbf{1,036,140 events} from 323 matches (258 training, 6
 
 \subsection{Results}
 
-% TODO: Fill in all four metric values from metrics_v2.json:
-%   ROC AUC: 0.8416, Brier: 0.0067, Log Loss: 0.0413, Spearman: 0.0816
-%   Test set: 49 freeze-frame matches, 160,169 events
-Version 2 achieved a test ROC AUC of \textbf{0.8416}, Brier Score of \textbf{0.0067}, Log Loss of \textbf{0.0413}, and Spearman $\rho$ of \textbf{0.0816}. The ROC AUC of 0.84 is a substantial improvement over Version 1 (0.68), confirming that the CNN architecture combined with full player positional context is far better at separating goal-chain events from background possession. The best validation Spearman $\rho$ was \textbf{0.0862} , modest in absolute terms due to the extreme class imbalance, but positive and consistent, indicating the model learns a meaningful threat ordering. The low Brier Score reflects that the model correctly assigns very low probabilities to the vast majority of non-threatening events.
+Version 2 achieved a test ROC AUC of \textbf{0.8416}, Brier Score of \textbf{0.0067}, Log Loss of \textbf{0.0413}, and Spearman $\rho$ of \textbf{0.0816}. The ROC AUC of 0.84 is a substantial improvement over Version 1 (0.68), confirming that the CNN architecture combined with full player positional context is far better at separating goal-chain events from background possession. The best validation Spearman $\rho$ was 0.0862. Although modest in absolute modest in absolute terms due to the extreme class imbalance, but positive and consistent, indicating the model learns a meaningful threat ordering. The low Brier Score reflects that the model correctly assigns very low probabilities to the vast majority of non-threatening events.
 
 \begin{figure}[h]
     \centering
@@ -492,9 +489,9 @@ Across all six panels the dominant story is similarity. The Version 2 scenario g
 
 \subsection{Limitations and Motivation for Version 3}
 
-Despite using 360 freeze-frame data, Version 2 still has a structural limitation: it encodes player positions as static image channels and relies on the CNN to learn the spatial relationships implicitly. The CNN is good at detecting local spatial patterns in images, but it is not naturally designed to reason about the explicit relationships between individual players , for example that there is a defender directly between the ball and the goal and two attackers making runs behind the defensive line. This kind of relational reasoning is better suited to an attention-based architecture.
+Despite using 360 freeze-frame data, Version 2 still has a structural limitation: it encodes player positions as static image channels and relies on the CNN to learn the spatial relationships implicitly. The CNN is good at detecting local spatial patterns in images, but it is not naturally designed to reason about the explicit relationships between individual players (for example, that there is a defender directly between the ball and the goal and two attackers making runs behind the defensive line). This kind of relational reasoning is better suited to an attention-based architecture.
 
-Additionally, while the ROC AUC of 0.8416 is strong, there is still room for improvement. The model captures broad positional threat correctly but may not be fully leveraging the player position information available in the 360 data , since encoding players as a blurred density map loses the individual-level relational structure between them.
+Additionally, while the ROC AUC of 0.8416 is strong, there is still room for improvement. The model captures broad positional threat correctly but may not be fully leveraging the player position information available in the 360 data, since encoding players as a blurred density map loses the individual-level relational structure between them.
 
 % ============================================================
 \section{Version 3: Transformer}\label{sec:v3}
@@ -502,12 +499,12 @@ Additionally, while the ROC AUC of 0.8416 is strong, there is still room for imp
 
 \subsection{Motivation}
 
-The key limitation of the CNN approach is that player positions are encoded as spatial density maps : each player becomes a Gaussian blob in the image, and the CNN must learn from the shape of the resulting density field. This makes it difficult for the model to distinguish between, say, ``two defenders in the penalty area'' and ``one defender directly blocking the shot and one standing wide.'' A Transformer with attention can reason about each player as an individual token and model their pairwise relationships explicitly.
+The key limitation of the CNN approach is that player positions are encoded as spatial density maps: each player becomes a Gaussian blob in the image, and the CNN must learn from the shape of the resulting density field. This makes it difficult for the model to distinguish between, say, ``two defenders in the penalty area'' and ``one defender directly blocking the shot and one standing wide.'' A Transformer with attention can reason about each player as an individual token and model their pairwise relationships explicitly.
 
 Version 3 therefore introduces a \textbf{two-stage architecture}:
 \begin{enumerate}
     \item \textbf{Stage 1}: The frozen Version 2 CNN, which provides a baseline position-based threat estimate.
-    \item \textbf{Stage 2}: A small Transformer that reads the 360 freeze-frame player positions as a sequence of tokens, uses self-attention to model relationships between players, and then uses cross-attention to let the ball position query that player context , producing a residual adjustment to the Stage 1 logit.
+    \item \textbf{Stage 2}: A small Transformer that reads the 360 freeze-frame player positions as a sequence of tokens, uses self-attention to model relationships between players, and then uses cross-attention to let the ball position query that player context, producing a residual adjustment to the Stage 1 logit.
 \end{enumerate}
 
 Only Stage 2 is trained in Version 3; Stage 1 weights are frozen. This means the model starts from a strong position-based baseline and learns only to adjust it based on player context, which reduces the risk of overfitting and keeps the training tractable.
